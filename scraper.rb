@@ -2,6 +2,8 @@ require 'open-uri'
 require 'nokogiri'
 require 'scraperwiki'
 require 'mechanize'
+require 'csv'
+require 'iconv'
 
 class Parser
   attr_accessor :url, :tag, :doc, :headers
@@ -23,20 +25,44 @@ class Parser
     @url = 'http://greenalco.ru'
     @agent = Mechanize.new
     @headers = %w(name paramsynonym category currency price description photos url)
+    @catalog = []
+    @id = 1
     configure_scraper
   end
 
   def call
+    add_header
     groups = scan_main_page
     groups.each do |group|
       scan_group(group)
     end
+    save
   end
 
   private
 
   def add_record(arr)
+    arr.map! { |str| Iconv.conv("windows-1251//IGNORE", "utf-8", str) }
+    @catalog << arr
     save_to_sqlite(arr)
+  end
+
+  def add_header
+    @catalog << @headers
+  end
+
+  def save
+    @catalog.uniq!
+    CSV.open('catalog.csv', 'w:windows-1251',
+             col_sep: ';',
+             headers: true,
+             converters: :numeric,
+             header_converters: :symbol
+            ) do |cat|
+      @catalog.each do |row|
+        cat << row
+      end
+    end
   end
 
   def scan_main_page
@@ -67,7 +93,9 @@ class Parser
   def scan_item(item)
     arr = []
     @agent.transact do
+      item_id = id
       @agent.click(item.content)
+      @agent.page.encoding = 'UTF-8'
       arr << @agent.page.at(@tag[:name]).content
       arr << item['href'][/.*\/(.*)\.html/, 1]
       arr << @agent.page.search(@tag[:category])[1].content
@@ -81,10 +109,21 @@ class Parser
       end
 
       arr << @agent.page.at(@tag[:description]).content.strip.chomp
-      arr << @agent.page.at(@tag[:photo])['src']
+      arr << item_id.to_s
+      download_pic("#{item_id}.jpg", @agent.page.at(@tag[:photo])['src'])
       arr << item['href']
     end
-    save_to_sqlite arr
+    add_record arr
+  end
+
+  def id
+    @id += 1
+  end
+
+  def download_pic(name, url)
+    open('pictures/' + name, 'wb') do |file|
+      file << open(url).read
+    end
   end
 
   def configure_scraper
