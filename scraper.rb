@@ -20,7 +20,7 @@ class Parser
     @tag[:price] = '.price span' #needs regexp
     @tag[:price2] = '.price' #needs regexp
     @tag[:description] = '.tab-content'
-    @tag[:photo] = '.image a img'
+    @tag[:photo] = '.image a'
 
     @url = 'http://greenalco.ru'
     @agent = Mechanize.new
@@ -63,6 +63,21 @@ class Parser
         cat << row
       end
     end
+    save_short
+  end
+
+  def save_short
+    CSV.open('catalog-short.csv', 'w:windows-1251',
+             col_sep: ';',
+             headers: true,
+             converters: :numeric,
+             header_converters: :symbol
+            ) do |cat|
+      @catalog.each do |row|
+        row[5] = row[5][0..20] unless row.empty?
+        cat << row
+      end
+    end
   end
 
   def scan_main_page
@@ -84,10 +99,20 @@ class Parser
     p "Scanning group #{group[0]}"
     @agent.transact do
       @agent.click(group[0])
-      @agent.page.search(@tag[:item]).each do |item|
-        scan_item item
+      loop do
+        @agent.page.search(@tag[:item]).each do |item|
+          scan_item item
+        end
+        break if next_page.nil?
+        @agent.click(next_page)
       end
     end
+  end
+
+  def next_page
+    next_p = @agent.page.link_with(text: />/)
+    p 'ONE MORE PAGE' unless next_p.nil?
+    next_p
   end
 
   def scan_item(item)
@@ -109,8 +134,8 @@ class Parser
       end
 
       arr << @agent.page.at(@tag[:description]).content.strip.chomp
-      arr << item_id.to_s
-      download_pic("#{item_id}.jpg", @agent.page.at(@tag[:photo])['src'])
+      arr << "#{item_id}.jpg"
+      download_pic("#{item_id}.jpg", @agent.page.at(@tag[:photo])['href'])
       arr << item['href']
     end
     add_record arr
